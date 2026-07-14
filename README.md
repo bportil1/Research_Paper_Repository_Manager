@@ -23,3 +23,35 @@ python -m backend.app
 - `backend/utils/text.py`: sanitization and title normalization
 
 The next commit should move CSV report I/O, scanning, checkpoints, imports, and Flask routes out of `legacy_app.py` one subsystem at a time, with tests after each move.
+
+
+## Stage 2
+
+Core CSV, filesystem synchronization, identity, checkpoints, logging, and PDF extraction are now outside `legacy_app.py`. Existing endpoints and the v10 frontend are preserved.
+
+## Stage 3
+
+The Flask API is now split into feature blueprints. `backend/app.py` is the
+composition root and no longer imports `legacy_app.py`.
+
+Run with:
+
+```bash
+python -m backend.app
+```
+
+
+## Stage 4 interface additions
+
+- Click a paper title to open its PDF with the operating-system default viewer.
+- Each paper row has a compact action menu:
+  - Open PDF
+  - Show in Folder
+  - Copy Path
+  - Edit Title
+  - Move to Topic
+  - Archive or Restore
+- Each topic heading has an Open Folder action.
+- Topic sections display live status-count badges.
+- A paper's status menu displays counts for every status within that paper's topic.
+- The global status filter displays library-wide counts.

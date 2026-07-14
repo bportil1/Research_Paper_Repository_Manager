@@ -17,6 +17,17 @@ from typing import Any
 
 from flask import Flask, jsonify, request, send_from_directory
 
+# Migrated core modules
+from backend.library.identity import ensure_unique_paper_ids, paper_id_for, sha256_file
+from backend.library.paths import ensure_manager_dirs, filesystem_pdfs, manager_dir, report_path
+from backend.library.report import LIBRARY_WRITE_LOCK, find_row, normalize_row, read_report, write_report_atomic
+from backend.library.scanner import reconcile_library
+from backend.services.checkpoints import create_checkpoint, now_stamp
+from backend.services.logging_service import log_operation
+from backend.services.pdf_metadata import extract_pdf_metadata
+from backend.services.bibtex import title_similarity
+from backend.utils.text import is_missing_title, normalize_title, sanitize_text
+
 APP_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = APP_DIR / "config.json"
 
@@ -33,7 +44,6 @@ app = Flask(__name__, static_folder="static")
 JOB_EXECUTOR = ThreadPoolExecutor(max_workers=2)
 JOBS: dict[str, dict[str, Any]] = {}
 JOBS_LOCK = threading.Lock()
-LIBRARY_WRITE_LOCK = threading.RLock()
 
 
 def create_job(kind: str, message: str = "Queued") -> str:
@@ -81,8 +91,6 @@ def run_job(job_id: str, fn) -> None:
     JOB_EXECUTOR.submit(wrapped)
 
 
-def now_stamp() -> str:
-    return datetime.now().strftime("%Y-%m-%d_%H%M%S_%f")
 
 
 def load_config() -> dict[str, Any]:
@@ -107,211 +115,27 @@ def get_library_root() -> Path:
     return root
 
 
-def manager_dir(root: Path) -> Path:
-    return root / ".paper_manager"
-
-
-def ensure_manager_dirs(root: Path) -> None:
-    base = manager_dir(root)
-    for child in ("checkpoints", "deleted_pdfs", "logs"):
-        (base / child).mkdir(parents=True, exist_ok=True)
-
-
-def report_path(root: Path) -> Path:
-    return root / "paper_report.csv"
 
 
 
-def sanitize_text(value: Any) -> str:
-    """Remove characters that cannot safely round-trip through CSV."""
-    text = str(value or "")
-    # NUL is rejected by Python's csv reader. Remove other disallowed
-    # C0 control characters while preserving tab/newline/carriage return.
-    text = text.replace("\x00", " ")
-    text = "".join(
-        ch if ch in "\t\n\r" or ord(ch) >= 32 else " "
-        for ch in text
-    )
-    # Normalize repeated whitespace without destroying readable content.
-    text = text.replace("\r\n", "\n").replace("\r", "\n")
-    text = re.sub(r"[ \t]+", " ", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
 
 
-def normalize_row(row: dict[str, Any]) -> dict[str, str]:
-    clean = {col: sanitize_text(row.get(col, "")) for col in DEFAULT_COLUMNS}
-    clean["Topic"] = clean["Topic"] or "Uncategorized"
-    clean["Title"] = clean["Title"] or "TITLE NOT FOUND"
-    clean["Status"] = clean["Status"] if clean["Status"] in ALLOWED_STATUSES else "Needs Review"
-    clean["FileState"] = clean["FileState"] or "Present"
-    clean["AddedDate"] = clean["AddedDate"] or datetime.now().date().isoformat()
-    clean["ModifiedDate"] = clean["ModifiedDate"] or datetime.now().isoformat()
-    return clean
 
 
-def read_report(root: Path) -> list[dict[str, str]]:
-    path = report_path(root)
-    if not path.exists():
-        return []
-    with path.open("r", encoding="utf-8-sig", newline="") as f:
-        return [normalize_row(dict(row)) for row in csv.DictReader(f)]
 
 
-def sha256_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as f:
-        while chunk := f.read(chunk_size):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
-def paper_id_for(digest: str, filename: str) -> str:
-    identity = digest or filename
-    return hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
 
 
-def filesystem_pdfs(root: Path) -> list[Path]:
-    return [
-        p for p in sorted(root.rglob("*.pdf"))
-        if not any(part in IGNORED_DIRS for part in p.relative_to(root).parts)
-    ]
 
 
-def ensure_unique_paper_ids(rows: list[dict[str, Any]]) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
-    """Return normalized rows with unique, stable PaperID values.
-
-    Older reports and duplicate PDF copies can legitimately contain the same
-    PaperID. The first occurrence keeps its ID. Later occurrences receive a
-    deterministic ID derived from their identity and path. No rows are removed
-    or merged.
-    """
-    normalized = [normalize_row(row) for row in rows]
-    # Final defensive pass: prevent embedded NUL/control bytes from reaching CSV.
-    normalized = [
-        {col: sanitize_text(row.get(col, "")) for col in DEFAULT_COLUMNS}
-        for row in normalized
-    ]
-    used: set[str] = set()
-    repairs: list[dict[str, str]] = []
-
-    for index, row in enumerate(normalized):
-        original = str(row.get("PaperID", "") or "").strip()
-        candidate = original
-
-        if not candidate or candidate in used:
-            identity_parts = [
-                original,
-                row.get("SHA256", ""),
-                row.get("Path", ""),
-                row.get("Filename", ""),
-                row.get("Title", ""),
-                str(index),
-            ]
-            seed = "|".join(identity_parts)
-            salt = 0
-            while True:
-                candidate = hashlib.sha256(f"{seed}|{salt}".encode("utf-8")).hexdigest()[:16]
-                if candidate not in used:
-                    break
-                salt += 1
-
-            row["PaperID"] = candidate
-            repairs.append({
-                "old_id": original,
-                "new_id": candidate,
-                "path": row.get("Path", ""),
-                "title": row.get("Title", ""),
-            })
-
-        used.add(candidate)
-
-    return normalized, repairs
 
 
-def reconcile_library(
-    root: Path,
-    compute_hashes: bool = False,
-    progress=None,
-) -> tuple[list[dict[str, str]], dict[str, Any]]:
-    """Reconcile the directory with the report.
 
-    Existing files matched by exact path are fast and are not re-hashed. New paths
-    are hashed only when move/rename detection is requested. This avoids hashing the
-    entire library on every synchronization.
-    """
-    old_rows = read_report(root)
-    active_old = [r for r in old_rows if r.get("FileState") != "Deleted"]
-    deleted_old = [r for r in old_rows if r.get("FileState") == "Deleted"]
-    old_by_path = {r["Path"]: r for r in active_old if r.get("Path")}
-    old_by_hash = {r["SHA256"]: r for r in active_old if r.get("SHA256")}
 
-    pdfs = filesystem_pdfs(root)
-    result: list[dict[str, str]] = []
-    matched_ids: set[str] = set()
-    new_rows: list[dict[str, str]] = []
-    moved_rows: list[dict[str, str]] = []
 
-    for index, pdf in enumerate(pdfs, 1):
-        if progress:
-            progress(index - 1, len(pdfs), f"Scanning {pdf.name}")
-        resolved = str(pdf.resolve())
-        rel = pdf.relative_to(root)
-        topic = rel.parts[0] if len(rel.parts) > 1 else "Uncategorized"
-        old = old_by_path.get(resolved)
-        digest = old.get("SHA256", "") if old else ""
 
-        # Hash only new paths when rename detection is requested. Existing paths
-        # retain their stored hash and do not block normal synchronization.
-        if old is None and compute_hashes:
-            digest = sha256_file(pdf)
-            candidate = old_by_hash.get(digest)
-            if candidate and candidate.get("PaperID") not in matched_ids:
-                old = candidate
-                moved_rows.append({
-                    "PaperID": candidate.get("PaperID", ""),
-                    "Title": candidate.get("Title", ""),
-                    "from": candidate.get("Path", ""),
-                    "to": resolved,
-                })
-
-        row = normalize_row({
-            **(old or {}),
-            "PaperID": (old or {}).get("PaperID", "") or paper_id_for(digest, resolved),
-            "Topic": topic,
-            "Filename": pdf.name,
-            "Path": resolved,
-            "FileState": "Present",
-            "SHA256": digest,
-            "OriginalPath": "",
-            "ArchivedAt": "",
-        })
-        result.append(row)
-        matched_ids.add(row["PaperID"])
-        if old is None:
-            new_rows.append(row)
-
-    missing_rows: list[dict[str, str]] = []
-    for old in active_old:
-        if old.get("PaperID") not in matched_ids:
-            missing = normalize_row(old)
-            missing["FileState"] = "Missing"
-            result.append(missing)
-            missing_rows.append(missing)
-
-    result.extend(deleted_old)
-    if progress:
-        progress(len(pdfs), len(pdfs), "Directory scan complete")
-    summary = {
-        "new": len(new_rows),
-        "missing": len(missing_rows),
-        "moved_or_renamed": len(moved_rows),
-        "total_after_sync": len(result),
-        "new_rows": new_rows,
-        "missing_rows": missing_rows,
-        "moved_rows": moved_rows,
-    }
-    return result, summary
 
 def enrich_missing_pdf_metadata(rows: list[dict[str, str]], only_new_ids: set[str] | None = None) -> dict[str, int]:
     updated = errors = 0
@@ -340,139 +164,15 @@ def enrich_missing_pdf_metadata(rows: list[dict[str, str]], only_new_ids: set[st
     return {"metadata_updated": updated, "metadata_errors": errors}
 
 
-def create_checkpoint(root: Path, operation: str, include_files: list[Path]) -> Path:
-    ensure_manager_dirs(root)
-    cp = manager_dir(root) / "checkpoints" / now_stamp()
-    cp.mkdir(parents=True, exist_ok=True)
-
-    current_report = report_path(root)
-    if current_report.exists():
-        shutil.copy2(current_report, cp / "paper_report.csv")
-
-    manifest_rows, _ = reconcile_library(root, compute_hashes=False)
-    with (cp / "library_manifest.csv").open("w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=DEFAULT_COLUMNS, quoting=csv.QUOTE_ALL, escapechar="\\", doublequote=True)
-        writer.writeheader()
-        writer.writerows(manifest_rows)
-
-    copied = []
-    for src in include_files:
-        if src.exists() and src.is_file():
-            try:
-                rel = src.resolve().relative_to(root.resolve())
-            except ValueError:
-                rel = Path(src.name)
-            dst = cp / "files" / rel
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dst)
-            copied.append(str(rel))
-
-    (cp / "operation.json").write_text(json.dumps({
-        "created_at": datetime.now().isoformat(),
-        "operation": operation,
-        "copied_files": copied,
-    }, indent=2), encoding="utf-8")
-    return cp
-
-
-def log_operation(root: Path, operation: str, details: dict[str, Any]) -> None:
-    ensure_manager_dirs(root)
-    path = manager_dir(root) / "logs" / "operations.jsonl"
-    with path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps({
-            "timestamp": datetime.now().isoformat(),
-            "operation": operation,
-            "details": details,
-        }) + "\n")
-
-
-def write_report_atomic(
-    root: Path,
-    rows: list[dict[str, Any]],
-    operation: str,
-    checkpoint: bool = True,
-    allow_empty: bool = False,
-    expected_ids: set[str] | None = None,
-) -> None:
-    """Safely replace paper_report.csv with validation and automatic rollback.
-
-    Empty writes are rejected when the current report is nonempty. When
-    expected_ids is supplied, every existing record must still be present.
-    """
-    with LIBRARY_WRITE_LOCK:
-        ensure_manager_dirs(root)
-        current_rows = read_report(root)
-        normalized, id_repairs = ensure_unique_paper_ids(rows)
-
-        if current_rows and not normalized and not allow_empty:
-            raise RuntimeError(
-                f"Refusing to replace a nonempty report ({len(current_rows)} rows) with an empty report."
-            )
-
-        ids = [row.get("PaperID", "") for row in normalized if row.get("PaperID", "")]
-        if len(ids) != len(set(ids)):
-            raise RuntimeError("Internal PaperID repair failed to produce unique IDs.")
-
-        if expected_ids is not None:
-            output_ids = set(ids)
-            missing_ids = expected_ids - output_ids
-            if missing_ids:
-                raise RuntimeError(
-                    f"Refusing report write because {len(missing_ids)} existing records would be lost."
-                )
-
-        checkpoint_path = None
-        if checkpoint:
-            checkpoint_path = create_checkpoint(root, operation=operation, include_files=[])
-
-        target = report_path(root)
-        fd, tmp_name = tempfile.mkstemp(prefix="paper_report_", suffix=".tmp", dir=str(root))
-        os.close(fd)
-        tmp_path = Path(tmp_name)
-
-        try:
-            with tmp_path.open("w", encoding="utf-8", newline="") as f:
-                writer = csv.DictWriter(f, fieldnames=DEFAULT_COLUMNS, quoting=csv.QUOTE_ALL, escapechar="\\", doublequote=True)
-                writer.writeheader()
-                writer.writerows(normalized)
-
-            with tmp_path.open("r", encoding="utf-8-sig", newline="") as f:
-                check_rows = [normalize_row(dict(row)) for row in csv.DictReader(f)]
-
-            if len(check_rows) != len(normalized):
-                raise RuntimeError(
-                    f"CSV validation failed: wrote {len(normalized)} rows but read back {len(check_rows)}."
-                )
-
-            check_ids = [row.get("PaperID", "") for row in check_rows if row.get("PaperID", "")]
-            if len(check_ids) != len(set(check_ids)):
-                raise RuntimeError("CSV validation failed: duplicate PaperID values after serialization.")
-
-            os.replace(tmp_path, target)
-            log_operation(root, operation, {
-                "rows_before": len(current_rows),
-                "rows_written": len(normalized),
-                "paper_ids_repaired": len(id_repairs),
-                "paper_id_repairs": id_repairs[:100],
-                "checkpoint": str(checkpoint_path) if checkpoint_path else "",
-            })
-        except Exception:
-            tmp_path.unlink(missing_ok=True)
-            raise
-        finally:
-            tmp_path.unlink(missing_ok=True)
-
-
-def find_row(rows: list[dict[str, str]], paper_id: str) -> dict[str, str]:
-    for row in rows:
-        if row.get("PaperID") == paper_id:
-            return row
-    raise KeyError(f"Paper not found: {paper_id}")
 
 
 
-def normalize_title(value: str) -> str:
-    return " ".join(re.sub(r"[^a-z0-9]+", " ", str(value).lower()).split())
+
+
+
+
+
+
 
 
 def split_bib_entries(text: str) -> list[str]:
@@ -574,9 +274,6 @@ def parse_bib_entry(entry: str) -> dict[str, str] | None:
     return result
 
 
-def title_similarity(a: str, b: str) -> float:
-    from difflib import SequenceMatcher
-    return SequenceMatcher(None, normalize_title(a), normalize_title(b)).ratio()
 
 
 def best_bib_match(entry: dict[str, str], rows: list[dict[str, str]]) -> tuple[dict[str, str] | None, float]:
@@ -594,68 +291,8 @@ def best_bib_match(entry: dict[str, str], rows: list[dict[str, str]]) -> tuple[d
     return best, score
 
 
-def is_missing_title(value: str) -> bool:
-    normalized = normalize_title(value)
-    return not normalized or normalized in {"title not found", "error reading pdf"} or normalized.startswith("error reading pdf")
 
 
-def extract_pdf_metadata(path: Path) -> dict[str, str]:
-    import fitz
-
-    doc = fitz.open(path)
-    meta = doc.metadata or {}
-    metadata_title = str(meta.get("title", "") or "").strip()
-    authors = str(meta.get("author", "") or "").strip()
-    keywords = str(meta.get("keywords", "") or "").strip()
-    subject = str(meta.get("subject", "") or "").strip()
-
-    title = metadata_title if not is_missing_title(metadata_title) else ""
-    if len(doc):
-        page = doc[0]
-        page_height = float(page.rect.height or 792)
-        blocks = page.get_text("dict").get("blocks", [])
-        candidates: list[tuple[float, float, str]] = []
-        for block in blocks:
-            for line in block.get("lines", []):
-                spans = line.get("spans", [])
-                text = " ".join(str(span.get("text", "")).strip() for span in spans).strip()
-                text = re.sub(r"\s+", " ", text)
-                if not text or len(text) < 6:
-                    continue
-                lowered = text.lower().strip(" :.-")
-                if lowered in {"abstract", "introduction", "keywords", "contents"}:
-                    continue
-                if lowered.startswith(("arxiv:", "doi:", "http://", "https://")):
-                    continue
-                sizes = [float(span.get("size", 0) or 0) for span in spans]
-                ys = [float((span.get("bbox") or [0, page_height, 0, page_height])[1]) for span in spans]
-                size = max(sizes or [0])
-                y = min(ys or [page_height])
-                if y <= page_height * 0.48 and size >= 8:
-                    candidates.append((size, y, text))
-
-        if candidates:
-            candidates.sort(key=lambda item: (-item[0], item[1]))
-            max_size = candidates[0][0]
-            likely = [item for item in candidates if item[0] >= max_size * 0.82]
-            likely.sort(key=lambda item: item[1])
-            parts: list[str] = []
-            for _, _, text in likely:
-                if text not in parts:
-                    parts.append(text)
-                if len(" ".join(parts)) >= 350:
-                    break
-            inferred = " ".join(parts).strip()[:500]
-            if inferred and not is_missing_title(inferred):
-                title = inferred
-
-        if not title:
-            lines = [re.sub(r"\s+", " ", line).strip() for line in page.get_text("text").splitlines()]
-            lines = [line for line in lines if len(line) >= 8 and line.lower() not in {"abstract", "introduction"}]
-            if lines:
-                title = " ".join(lines[:2])[:500]
-
-    return {"Title": title, "Authors": authors, "Keywords": keywords, "Abstract": subject}
 
 
 COLUMN_ALIASES = {
