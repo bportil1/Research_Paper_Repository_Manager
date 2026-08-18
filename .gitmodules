@@ -1,0 +1,4 @@
+[submodule "modules/paper_searcher"]
+	path = modules/paper_searcher
+	url = git@github.com:bportil1/Literature_Review_Collector.git
+	branch = main
