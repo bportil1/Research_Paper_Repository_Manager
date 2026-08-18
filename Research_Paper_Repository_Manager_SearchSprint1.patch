@@ -1,0 +1,179 @@
+diff --git a/README.md b/README.md
+index cdaf554..3feaae5 100644
+--- a/README.md
++++ b/README.md
+@@ -66,3 +66,20 @@ python -m unittest discover -s tests -v
+ ```
+ 
+ See `docs/ARCHITECTURE.md` and `docs/MODULE_CONTRACT.md` for the module boundary.
++
++## Research Search companion — Sprint 1
++
++The Paper Manager now exposes a **Research Search** toolbar action. It launches
++an independent nested module at `modules/paper_searcher` on port `8770` and
++opens the search UI in a separate browser window.
++
++The searcher remains independently runnable and does not import Paper Manager
++internals. Sprint 1 contains the UI shell only; automated provider retrieval is
++added in later sprints.
++
++When the searcher is converted to its own Git repository, add it here as the
++Paper Manager's nested submodule and use recursive submodule initialization:
++
++```bash
++git submodule update --init --recursive
++```
+diff --git a/docs/RESEARCH_SEARCH_INTEGRATION.md b/docs/RESEARCH_SEARCH_INTEGRATION.md
+new file mode 100644
+index 0000000..6e4c2b3
+--- /dev/null
++++ b/docs/RESEARCH_SEARCH_INTEGRATION.md
+@@ -0,0 +1,30 @@
++# Research Search Integration Contract
++
++## Ownership
++
++`modules/paper_searcher` is owned by the Paper Manager but remains an
++independently runnable application.
++
++## Runtime contract
++
++- Paper Manager: `127.0.0.1:8765`
++- Research Search: `127.0.0.1:8770`
++- Paper Manager launches `modules/paper_searcher/run.py` when required.
++- Paper Manager opens `http://127.0.0.1:8770/research-search` in a separate window.
++
++## Boundary
++
++The searcher does not import `reference_manager` code. The Paper Manager does
++not import search provider implementations. Integration is process/HTTP based.
++
++## Git
++
++The intended repository layout is:
++
++```text
++Research_Paper_Repository_Manager/
++└── modules/
++    └── paper_searcher/    # nested Git submodule
++```
++
++The top-level host therefore only needs recursive submodule initialization.
+diff --git a/reference_manager/web/app.py b/reference_manager/web/app.py
+index ea5bec6..a7ef815 100644
+--- a/reference_manager/web/app.py
++++ b/reference_manager/web/app.py
+@@ -9,6 +9,7 @@ from reference_manager.web.routes.job_routes import bp as job_bp
+ from reference_manager.web.routes.library_routes import bp as library_bp
+ from reference_manager.web.routes.metadata_routes import bp as metadata_bp
+ from reference_manager.web.routes.paper_routes import bp as paper_bp
++from reference_manager.web.routes.research_search_routes import bp as research_search_bp
+ 
+ 
+ def create_app() -> Flask:
+@@ -21,6 +22,7 @@ def create_app() -> Flask:
+         import_bp,
+         metadata_bp,
+         checkpoint_bp,
++        research_search_bp,
+     ):
+         app.register_blueprint(blueprint)
+ 
+diff --git a/reference_manager/web/routes/research_search_routes.py b/reference_manager/web/routes/research_search_routes.py
+new file mode 100644
+index 0000000..e5276f7
+--- /dev/null
++++ b/reference_manager/web/routes/research_search_routes.py
+@@ -0,0 +1,70 @@
++from __future__ import annotations
++
++import socket
++import subprocess
++import sys
++import time
++from pathlib import Path
++
++from flask import Blueprint, jsonify
++
++bp = Blueprint("research_search", __name__)
++SEARCH_HOST = "127.0.0.1"
++SEARCH_PORT = 8770
++SEARCH_URL = f"http://{SEARCH_HOST}:{SEARCH_PORT}/research-search"
++
++
++def _project_root() -> Path:
++    return Path(__file__).resolve().parents[3]
++
++
++def _search_module_root() -> Path:
++    return _project_root() / "modules" / "paper_searcher"
++
++
++def _port_open(host: str, port: int, timeout: float = 0.2) -> bool:
++    try:
++        with socket.create_connection((host, port), timeout=timeout):
++            return True
++    except OSError:
++        return False
++
++
++@bp.post("/api/research-search/launch")
++def launch_research_search():
++    if _port_open(SEARCH_HOST, SEARCH_PORT):
++        return jsonify({"ok": True, "url": SEARCH_URL, "already_running": True})
++
++    module_root = _search_module_root()
++    run_file = module_root / "run.py"
++    if not run_file.exists():
++        return jsonify({
++            "error": (
++                "Research Search module is not installed. Expected nested module at "
++                f"{module_root}. Run git submodule update --init --recursive after the "
++                "paper_searcher repository is added as a submodule."
++            )
++        }), 404
++
++    subprocess.Popen(
++        [sys.executable, str(run_file)],
++        cwd=str(module_root),
++        stdout=subprocess.DEVNULL,
++        stderr=subprocess.DEVNULL,
++        start_new_session=True,
++    )
++
++    # Give the standalone service a short startup window so the browser does
++    # not race the new process and land on a connection-refused page.
++    for _ in range(30):
++        if _port_open(SEARCH_HOST, SEARCH_PORT):
++            return jsonify({"ok": True, "url": SEARCH_URL, "already_running": False})
++        time.sleep(0.1)
++
++    return jsonify({
++        "error": (
++            "Research Search was started but did not become reachable on "
++            f"{SEARCH_HOST}:{SEARCH_PORT}. Run modules/paper_searcher/run.py "
++            "directly to see its startup error."
++        )
++    }), 500
+diff --git a/reference_manager/web/static/index.html b/reference_manager/web/static/index.html
+index 2af8c13..82bee85 100644
+--- a/reference_manager/web/static/index.html
++++ b/reference_manager/web/static/index.html
+@@ -7,7 +7,7 @@
+ .status-badge{border:1px solid #d4dae3;border-radius:999px;padding:3px 7px;font-size:12px;background:#fff;cursor:pointer}
+ .status-badge:hover{background:#eef3f8}
+ .action-trigger{min-width:34px;font-weight:bold}.small{font-size:.89em;color:var(--muted);word-break:break-word}td[contenteditable]{outline:none}td[contenteditable]:focus{box-shadow:inset 0 0 0 2px #9faec5}.pill{display:inline-flex;gap:6px;align-items:center;border:1px solid #c3cad5;border-radius:999px;padding:5px 8px;cursor:pointer;min-width:112px}.dot{width:9px;height:9px;border-radius:50%}.OK{background:var(--ok)}.NeedsReview{background:var(--warn)}.Priority{background:#b02a2a}.Read{background:var(--blue)}.Cited{background:#7046a1}.Ignore{background:var(--gray)}.menu{position:fixed;display:none;background:#fff;border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 25px #0002;z-index:1000;overflow:hidden}.menu button{display:block;width:100%;border:0;border-radius:0;text-align:left}.row-actions{white-space:nowrap}.mini{padding:5px 7px;font-size:12px}.danger{color:var(--danger)}.modal-bg{display:none;position:fixed;inset:0;background:#0006;z-index:900;align-items:center;justify-content:center}.modal{background:#fff;border-radius:11px;padding:18px;width:min(700px,calc(100vw - 30px));max-height:85vh;overflow:auto}.modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:15px}.progress{height:8px;background:#e2e7ef;border-radius:999px;overflow:hidden}.progress div{height:100%;background:var(--accent)}.jobbox{border:1px solid var(--border);border-radius:9px;padding:12px;background:#fbfcfe;margin:12px 0}.jobline{display:flex;justify-content:space-between;gap:12px;margin-bottom:7px}.spinner{display:inline-block;width:14px;height:14px;border:2px solid #ccd4df;border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite;margin-right:7px}@keyframes spin{to{transform:rotate(360deg)}}@media(max-width:900px){.app{grid-template-columns:1fr}.side{position:relative;height:auto}}
+-</style></head><body><div class="app"><aside class="side"><h1 style="font-size:20px">Paper Manager</h1><div id="sideSummary" class="summary"></div><div id="stats" class="stats"></div><h2>Topics</h2><div id="topicList" class="topic-list"></div></aside><section class="main"><header><h1>Offline Paper Reference Manager</h1><div id="summary" class="summary"></div><div class="toolbar"><input id="search" type="search" placeholder="Search title, author, venue, DOI, notes..."><select id="statusFilter"><option value="">All statuses</option></select><button class="primary" onclick="syncPreview()">Sync</button><button onclick="save()">Save</button><button onclick="more(event)">More ▾</button></div></header><main class="content"><div id="notice" class="summary">Loading...</div><div id="report"></div></main></section></div><div id="statusMenu" class="menu"></div><div id="rowMenu" class="menu"></div><div id="moreMenu" class="menu"></div><div id="modalBg" class="modal-bg"><div id="modal" class="modal"></div></div><input id="bibInput" type="file" accept=".bib" hidden onchange="importBib(this)"><input id="csvInput" type="file" accept=".csv,text/csv" hidden onchange="importCSV(this)"><script>
++</style></head><body><div class="app"><aside class="side"><h1 style="font-size:20px">Paper Manager</h1><div id="sideSummary" class="summary"></div><div id="stats" class="stats"></div><h2>Topics</h2><div id="topicList" class="topic-list"></div></aside><section class="main"><header><h1>Offline Paper Reference Manager</h1><div id="summary" class="summary"></div><div class="toolbar"><input id="search" type="search" placeholder="Search title, author, venue, DOI, notes..."><select id="statusFilter"><option value="">All statuses</option></select><button class="primary" onclick="syncPreview()">Sync</button><button onclick="save()">Save</button><button onclick="launchResearchSearch()">Research Search</button><button onclick="more(event)">More ▾</button></div></header><main class="content"><div id="notice" class="summary">Loading...</div><div id="report"></div></main></section></div><div id="statusMenu" class="menu"></div><div id="rowMenu" class="menu"></div><div id="moreMenu" class="menu"></div><div id="modalBg" class="modal-bg"><div id="modal" class="modal"></div></div><input id="bibInput" type="file" accept=".bib" hidden onchange="importBib(this)"><input id="csvInput" type="file" accept=".csv,text/csv" hidden onchange="importCSV(this)"><script>
+ let rows=[],selectedTopic='',openTopics=new Set(),statusId=null;const statuses=['Needs Review','Priority','Read','Cited','OK','Ignore'];
+ const E=s=>String(s??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');const C=s=>String(s).replaceAll(' ','');
+ async function api(u,o={}){const r=await fetch(u,o);const d=await r.json();if(!r.ok)throw Error(d.error||'Request failed');return d}function note(s){document.getElementById('notice').innerText=s}
+@@ -64,6 +64,8 @@ function rowActions(e,id){
+ }
+ async function load(){try{const d=await api('/api/library');rows=d.rows;note(`Loaded ${rows.length} records from ${d.library_root}`);render()}catch(e){note(e.message);config()}}async function save(){await api('/api/report',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({rows})});note('Metadata saved with checkpoint.');await load()}
+ function modal(h){document.getElementById('modal').innerHTML=h;document.getElementById('modalBg').style.display='flex'}function closeModal(){document.getElementById('modalBg').style.display='none'}async function config(){let c={};try{c=await api('/api/config')}catch{}modal(`<h2>Library Settings</h2><input id=root value="${E(c.library_root||'')}" placeholder="/home/user/Documents/offline_papers" style="width:100%"><div class=modal-actions><button onclick=closeModal()>Cancel</button><button class=primary onclick=saveConfig()>Save</button></div>`)}async function saveConfig(){await api('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({library_root:document.getElementById('root').value})});closeModal();load()}
++
++async function launchResearchSearch(){try{const d=await api('/api/research-search/launch',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});const w=window.open(d.url,'paperResearchSearch','width=1280,height=900,resizable=yes,scrollbars=yes');if(!w)alert('Research Search was launched but the browser blocked the new window. Allow pop-ups for this local site and try again.');else note(d.already_running?'Opened the existing Research Search window.':'Started Research Search and opened its window.')}catch(e){alert('Unable to launch Research Search: '+e.message);note('Research Search launch failed: '+e.message)}}
+ async function syncPreview(){modal(`<h2>Synchronize Library</h2><p>The sync will scan the directory, preserve existing metadata, detect moved files when hashes are available, and extract titles only where they are missing.</p><label><input id=detectMoves type=checkbox checked> Detect externally moved or renamed PDFs</label><br><label><input id=extractTitles type=checkbox checked> Extract missing titles from PDF first pages</label><div class=modal-actions><button onclick=closeModal()>Cancel</button><button class=primary onclick=syncApply()>Start Sync</button></div>`)}
+ async function syncApply(){const detect_moves=document.getElementById('detectMoves').checked,extract_titles=document.getElementById('extractTitles').checked;const d=await api('/api/sync/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({detect_moves,extract_titles})});await watchJob(d.job_id,'Synchronizing Library',async result=>{note(`Sync complete: ${result.new||0} new, ${result.missing||0} missing, ${result.moved_or_renamed||0} moved/renamed.`);await load()})}
+ function move(id){const r=rows.find(x=>x.PaperID===id);modal(`<h2>Move Paper</h2><p>${E(r.Title)}</p><input id=dest value="${E(r.Topic)}" list=topics style="width:100%"><datalist id=topics>${topics().map(t=>`<option value="${E(t)}">`).join('')}</datalist><div class=modal-actions><button onclick=closeModal()>Cancel</button><button class=primary onclick="doMove('${id}')">Move PDF</button></div>`)}async function doMove(id){await api('/api/papers/move',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({paper_id:id,destination_topic:document.getElementById('dest').value})});closeModal();load()}async function archive(id){if(!confirm('Archive this PDF?'))return;await api('/api/papers/archive',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({paper_id:id})});load()}async function restore(id){await api('/api/papers/restore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({paper_id:id})});load()}

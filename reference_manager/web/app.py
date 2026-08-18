@@ -9,6 +9,7 @@ from reference_manager.web.routes.job_routes import bp as job_bp
 from reference_manager.web.routes.library_routes import bp as library_bp
 from reference_manager.web.routes.metadata_routes import bp as metadata_bp
 from reference_manager.web.routes.paper_routes import bp as paper_bp
+from reference_manager.web.routes.research_search_routes import bp as research_search_bp
 
 
 def create_app() -> Flask:
@@ -21,6 +22,7 @@ def create_app() -> Flask:
         import_bp,
         metadata_bp,
         checkpoint_bp,
+        research_search_bp,
     ):
         app.register_blueprint(blueprint)
 

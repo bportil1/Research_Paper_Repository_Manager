@@ -66,3 +66,20 @@ python -m unittest discover -s tests -v
 ```
 
 See `docs/ARCHITECTURE.md` and `docs/MODULE_CONTRACT.md` for the module boundary.
+
+## Research Search companion — Sprint 1
+
+The Paper Manager now exposes a **Research Search** toolbar action. It launches
+an independent nested module at `modules/paper_searcher` on port `8770` and
+opens the search UI in a separate browser window.
+
+The searcher remains independently runnable and does not import Paper Manager
+internals. Sprint 1 contains the UI shell only; automated provider retrieval is
+added in later sprints.
+
+When the searcher is converted to its own Git repository, add it here as the
+Paper Manager's nested submodule and use recursive submodule initialization:
+
+```bash
+git submodule update --init --recursive
+```
