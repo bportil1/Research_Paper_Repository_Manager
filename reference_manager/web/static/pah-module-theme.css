@@ -1,0 +1,275 @@
+/*
+ * PAH Visual Identity — reusable contract for standalone/detached submodules
+ *
+ * This file is intended to be copied (or served centrally) into the Code
+ * Analyzer, Document Workbench, Reference Manager, and future PAH tools.
+ * Load it AFTER each module's existing stylesheet.
+ *
+ * It does not assume a framework. A module can adopt it gradually by adding
+ * the classes/data attributes below without changing JS IDs or behavior.
+ */
+
+:root {
+  color-scheme: light;
+  --pah-navy-950: #05244c;
+  --pah-navy-900: #082f63;
+  --pah-navy-800: #0d457e;
+  --pah-blue-700: #17679c;
+  --pah-blue-600: #247eb0;
+  --pah-sky-300: #8ecae6;
+  --pah-sky-200: #b8dfef;
+  --pah-teal-600: #008f86;
+  --pah-teal-500: #00a69a;
+  --pah-green-500: #62b96a;
+  --pah-page: #e9eef2;
+  --pah-surface: #ffffff;
+  --pah-surface-2: #f4f7f9;
+  --pah-border: #bdc8d1;
+  --pah-border-strong: #8897a3;
+  --pah-text: #17212b;
+  --pah-muted: #64717d;
+  --pah-editor: #15191f;
+  --pah-editor-2: #1b2129;
+  --pah-terminal: #0f1419;
+  --pah-radius-xs: 2px;
+  --pah-radius-sm: 3px;
+  --pah-radius-md: 5px;
+  --pah-shadow-sm: 0 1px 2px rgb(5 36 76 / 0.08);
+  --pah-shadow-md: 0 5px 18px rgb(5 36 76 / 0.12);
+}
+
+body.pah-module,
+[data-pah-module-root] {
+  margin: 0;
+  background: var(--pah-page);
+  color: var(--pah-text);
+  font-family: "Segoe UI", "Noto Sans", Ubuntu, system-ui, -apple-system, sans-serif;
+}
+
+/* Optional internal frame for standalone windows. When PAH already provides
+   the outer detached-window title/status strip, modules may omit this. */
+.pah-module-frame {
+  min-height: 100vh;
+  background: var(--pah-page);
+}
+
+.pah-module-header {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 10px;
+  background: linear-gradient(180deg, var(--pah-navy-800), var(--pah-navy-900));
+  color: #fff;
+  border-bottom: 2px solid var(--pah-sky-300);
+}
+
+.pah-module-header__title {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.065em;
+  text-transform: uppercase;
+}
+
+.pah-module-header__context {
+  color: rgb(255 255 255 / 0.70);
+  font-size: 10px;
+}
+
+.pah-module-header__actions {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+
+/* Navigation uses a compact desktop tab strip. */
+.pah-tool-nav,
+[data-pah-tool-nav] {
+  display: flex;
+  gap: 0;
+  min-height: 33px;
+  background: var(--pah-surface-2);
+  border-bottom: 1px solid var(--pah-border);
+}
+
+.pah-tool-nav > a,
+.pah-tool-nav > button,
+[data-pah-tool-nav] > a,
+[data-pah-tool-nav] > button {
+  position: relative;
+  padding: 6px 11px;
+  background: transparent;
+  color: var(--pah-muted);
+  border: 0;
+  border-right: 1px solid var(--pah-border);
+  border-radius: 0;
+  box-shadow: none;
+  text-decoration: none;
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.pah-tool-nav > a:hover,
+.pah-tool-nav > button:hover,
+[data-pah-tool-nav] > a:hover,
+[data-pah-tool-nav] > button:hover {
+  background: #e7f2f8;
+  color: var(--pah-navy-900);
+}
+
+.pah-tool-nav > .active,
+[data-pah-tool-nav] > .active {
+  background: #fff;
+  color: var(--pah-navy-900);
+  box-shadow: inset 0 -3px var(--pah-sky-300);
+}
+
+/* Work regions: square-ish, explicit, dense. */
+.pah-tool-section,
+[data-pah-section] {
+  background: #fff;
+  border: 1px solid var(--pah-border);
+  border-radius: var(--pah-radius-sm);
+  box-shadow: var(--pah-shadow-sm);
+}
+
+.pah-tool-section__heading,
+[data-pah-section-heading] {
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 8px;
+  background: var(--pah-navy-900);
+  color: #fff;
+  border-bottom: 2px solid var(--pah-sky-300);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+/* Controls deliberately resemble software controls rather than soft web pills. */
+body.pah-module button,
+[data-pah-module-root] button,
+.pah-button {
+  min-height: 29px;
+  padding: 4px 9px;
+  background: linear-gradient(#ffffff, #e2e8ed);
+  color: var(--pah-text);
+  border: 1px solid var(--pah-border-strong);
+  border-radius: var(--pah-radius-sm);
+  box-shadow: 0 1px 0 rgb(255 255 255 / 0.86) inset;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+body.pah-module button:hover,
+[data-pah-module-root] button:hover,
+.pah-button:hover {
+  background: #e6f2f8;
+  color: var(--pah-navy-900);
+  border-color: var(--pah-blue-600);
+}
+
+body.pah-module input,
+body.pah-module select,
+body.pah-module textarea,
+[data-pah-module-root] input,
+[data-pah-module-root] select,
+[data-pah-module-root] textarea,
+.pah-control {
+  background: #fff;
+  color: var(--pah-text);
+  border: 1px solid var(--pah-border-strong);
+  border-radius: var(--pah-radius-sm);
+  font: inherit;
+}
+
+/* Tables deliberately retain the alternating light-blue data-grid lineage. */
+.pah-data-table,
+[data-pah-table] {
+  width: 100%;
+  border-collapse: collapse;
+  background: #fff;
+}
+
+.pah-data-table th,
+[data-pah-table] th {
+  padding: 7px 9px;
+  background: var(--pah-navy-900);
+  color: #fff;
+  border: 1px solid var(--pah-navy-950);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.045em;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.pah-data-table td,
+[data-pah-table] td {
+  padding: 7px 9px;
+  border: 1px solid #d6dfe5;
+}
+
+.pah-data-table tbody tr:nth-child(even),
+[data-pah-table] tbody tr:nth-child(even) {
+  background: #edf6fb;
+}
+
+.pah-data-table tbody tr:hover,
+[data-pah-table] tbody tr:hover {
+  background: #dceef8;
+}
+
+/* Semantic dark regions are opt-in, not the whole application's default. */
+.pah-code-surface,
+[data-pah-code-surface] {
+  background: var(--pah-editor);
+  color: #d7dee8;
+  border-color: #303946;
+}
+
+.pah-terminal-surface,
+[data-pah-terminal-surface] {
+  background: var(--pah-terminal);
+  color: #cfdbc9;
+  border-color: #29333e;
+}
+
+/* Compact data/state labels; no giant pill system. */
+.pah-state {
+  display: inline-flex;
+  align-items: center;
+  min-height: 17px;
+  padding: 1px 5px;
+  border: 1px solid var(--pah-border);
+  border-radius: var(--pah-radius-xs);
+  background: var(--pah-surface-2);
+  color: var(--pah-muted);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+/* Utility layout pieces intentionally small in scope. */
+.pah-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 6px;
+  background: var(--pah-surface-2);
+  border-bottom: 1px solid var(--pah-border);
+}
+
+.pah-work-area {
+  min-width: 0;
+  min-height: 0;
+  background: var(--pah-surface);
+}
