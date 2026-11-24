@@ -2,23 +2,53 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
+from threading import RLock
 from pathlib import Path
 from typing import Any
 
 APP_DIR = Path(__file__).resolve().parents[2]
 CONFIG_PATH = APP_DIR / "config.json"
+_CONFIG_LOCK = RLock()
+
+
+def _config_path() -> Path:
+    # The legacy host can still replace CONFIG_PATH; independent child processes
+    # select a per-instance path via their trusted launch environment.
+    override = os.environ.get("REFERENCE_MANAGER_CONFIG_PATH", "").strip()
+    return Path(override).expanduser().resolve() if override else CONFIG_PATH
 
 
 def load_config() -> dict[str, Any]:
-    if not CONFIG_PATH.exists():
+    path = _config_path()
+    if not path.exists():
         return {"library_root": ""}
-    return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    result = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(result, dict):
+        raise ValueError("Reference Manager configuration must be a JSON object")
+    return result
 
 
 def save_config(config: dict[str, Any]) -> None:
-    tmp = CONFIG_PATH.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(config, indent=2), encoding="utf-8")
-    os.replace(tmp, CONFIG_PATH)
+    path = _config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # A unique temp file prevents two writers to a legacy shared config path
+    # from colliding on the same .tmp filename; PAH children have unique paths.
+    with _CONFIG_LOCK:
+        tmp = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", dir=str(path.parent),
+                                             prefix=".reference-config-", suffix=".tmp",
+                                             encoding="utf-8", delete=False) as stream:
+                tmp = Path(stream.name)
+                json.dump(config, stream, indent=2)
+                stream.write("\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(tmp, path)
+        finally:
+            if tmp is not None:
+                tmp.unlink(missing_ok=True)
 
 
 def get_library_root() -> Path:

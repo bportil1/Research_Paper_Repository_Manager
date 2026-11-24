@@ -10,6 +10,9 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = ["PyMuPDF>=1.24"]
 
+[project.entry-points."pah.runtimes"]
+reference_manager = "reference_manager.integrations.pah:create_runtime_adapter"
+
 [project.optional-dependencies]
 web = ["Flask>=3.0,<4"]
 dev = ["pytest>=8", "Flask>=3.0,<4"]

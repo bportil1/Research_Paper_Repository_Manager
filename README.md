@@ -57,6 +57,23 @@ The supported integration boundary is `reference_manager.ReferenceManager`.
 External code should not import the Flask routes or reach into internal service
 modules unless it is extending this project itself.
 
+## PAH independent instances
+
+This package advertises the optional `pah.runtimes` adapter named
+`reference_manager`. PAH can create multiple independent Reference Manager
+processes through its Instances interface, each with a distinct port and
+private selected-library configuration. The standalone `python run.py` entry
+point retains its existing behavior. Reference Manager, rather than PAH, still
+owns library selection, paper reports, metadata, and jobs.
+
+If a research workspace explicitly provides a `reference_library` resource,
+that folder is preselected. Otherwise each new instance prompts for a library.
+For concurrent editing, use **different** library roots; editing the same
+`paper_report.csv` from two processes does not yet provide write-conflict
+protection. Research Search remains a shared legacy companion on port 8770,
+not a separate PAH-managed instance (see
+`docs/MI_01_PAH_MULTI_INSTANCE.md`).
+
 ## Development
 
 Run the core tests with:

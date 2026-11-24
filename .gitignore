@@ -6,3 +6,30 @@ venv/
 config.json
 .pytest_cache/
 .DS_Store
+
+# Generated PAH and standalone runtime outputs (repository root only).
+# Source packages named "analysis" elsewhere are unaffected.
+/analysis/
+/.pah/
+/runtime/
+/tmp/
+/cache/
+/logs/
+/exports/
+/scratch/
+/.xml-extractions/
+/build/
+/dist/
+
+# SQLite journals and local stores generated during analysis.
+*.sqlite3-wal
+*.sqlite3-shm
+*.sqlite3-journal
+*.db-wal
+*.db-shm
+*.db-journal
+
+# A library accidentally rooted at the source checkout must not stage
+# Reference Manager's library-local report or recovery files.
+/.paper_manager/
+/paper_report.csv
